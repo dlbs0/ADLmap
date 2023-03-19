@@ -23,7 +23,16 @@ onMounted(() => {
       source: 'areas',
       paint: {
         'fill-color': '#088',
-        'fill-opacity': 0.8
+        'fill-opacity': 0.1
+      }
+    });
+    mapbox.addLayer({
+      id: 'areasOutline',
+      type: 'line',
+      source: 'areas',
+      paint: {
+        'line-color': '#088',
+        'line-opacity': 1
       }
     });
   });
