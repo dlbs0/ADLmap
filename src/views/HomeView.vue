@@ -144,9 +144,8 @@ const score = computed(() => {
   <div id="map" class="map"></div>
   <div class="center">
     <div class="scoreHolder">
-      <div class="team" v-for="(value, key) in score" :key="value">
+      <div class="team" v-for="(value, key) in score" :key="key">
         <h2>{{ key != 'unclaimed' ? 'Team ' + key : key }}</h2>
-        <!-- {{ value }} -->
         Count: {{ value.count }} <br />
         Area: {{ value.area.toFixed(1) }}km²
       </div>
