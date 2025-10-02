@@ -51,12 +51,13 @@ onMounted(() => {
         'line-opacity': 1
       }
     });
-    updateMap();
+    setTimeout(() => {
+      updateMap();
+    }, 2000);
     map.on('click', 'areas', (e) => {
       if (!e.lngLat || !e.features) return;
       if (!map) return;
       const areaResult = area(e.features[0]) * 0.000001;
-      console.log('areaResult', areaResult);
       new mapboxgl.Popup()
         .setLngLat(e.lngLat)
         .setHTML(`${e?.features[0].properties?.electorate} <br/> ${areaResult.toFixed(1)}km2`)
@@ -76,7 +77,6 @@ onMounted(() => {
 });
 
 watch(gameState, (newState) => {
-  console.log('gameState changed', newState);
   // Update map colors based on game state
   // Iterate through the mapdata features and set the fill color based on the game state
   updateMap();
@@ -129,7 +129,6 @@ const score = computed(() => {
     const v = gameState.value[k as keyof typeof gameState.value] || 'unclaimed';
     teams[v].count = teams[v].count + 1;
     const feature = mapData.features.find((f) => f.properties?.electorate === k);
-    console.log('feature for', k, feature);
     if (feature) {
       teams[v].area = teams[v].area + (area(feature) * 0.000001 || 0);
     }
