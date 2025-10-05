@@ -43,11 +43,22 @@ onMounted(() => {
       }
     });
     map.addLayer({
+      id: 'areasOutlineBase',
+      type: 'line',
+      source: 'areas',
+      paint: {
+        'line-color': '#FFF',
+        'line-opacity': 1,
+        'line-width': 3
+      },
+      layout: {}
+    });
+    map.addLayer({
       id: 'areasOutline',
       type: 'line',
       source: 'areas',
       paint: {
-        'line-color': '#088',
+        'line-color': '#0DA',
         'line-opacity': 1
       }
     });
@@ -148,15 +159,16 @@ const score = computed(() => {
         Count: {{ value.count }} <br />
         Area: {{ value.area.toFixed(1) }}km²
       </div>
-      <!-- {{ score }} -->
     </div>
   </div>
   <div class="center">
     <div class="buttonHolder">
-      {{ currentlySelectedState }}
-      <button @click="claim('1')">Claim 1</button>
-      <button @click="claim('2')">Claim 2</button>
-      <button @click="claim('unclaimed')">Clear</button>
+      <div class="currSelected">
+        {{ currentlySelectedState }}
+      </div>
+      <button @click="claim('1')">CLAIM 1</button>
+      <button @click="claim('2')">CLAIM 2</button>
+      <button @click="claim('unclaimed')">CLEAR</button>
     </div>
   </div>
 </template>
@@ -185,6 +197,15 @@ const score = computed(() => {
   padding: 8px;
   border-radius: 4px;
   margin: auto;
+  align-items: center;
+  display: grid;
+  grid-template-columns: auto auto auto;
+  grid-template-rows: auto auto;
+}
+.currSelected {
+  grid-column: span 3;
+  text-align: center;
+  font-weight: bold;
 }
 
 .scoreHolder {
@@ -201,5 +222,16 @@ const score = computed(() => {
   h2 {
     margin: 0;
   }
+}
+
+button {
+  padding: 8px 16px;
+  /* font-size: 16px; */
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  background-color: #1e1e1e;
+  color: white;
+  transition: background-color 0.3s ease;
 }
 </style>
