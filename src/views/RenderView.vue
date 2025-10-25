@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import mapboxgl from 'mapbox-gl';
+import mapboxgl, { PointLike } from 'mapbox-gl';
 import { computed, onMounted, ref, watch } from 'vue';
+import type { Ref } from 'vue';
 import { gameState as gameStateInitial, mapData } from './data';
 import { area } from '@turf/turf';
-import { useDocument } from 'vuefire';
-import { collection, doc, getFirestore, setDoc } from 'firebase/firestore';
-import { firebaseApp } from '@/main';
-import { Output, BufferTarget, Mp4OutputFormat, CanvasSource, AudioBufferSource, QUALITY_HIGH } from 'mediabunny';
+import type { FeatureCollection, Point } from '@turf/turf';
+import { Output, BufferTarget, Mp4OutputFormat, CanvasSource, QUALITY_HIGH } from 'mediabunny';
+import { useStorage } from '@vueuse/core';
 
 mapboxgl.accessToken = 'pk.eyJ1IjoiZGxicyIsImEiOiJjazQ5MW05NnYwMGp5M2ZwZGhlaXlrMjZoIn0.Mftbu2WiRY4SChlAU8mfrA';
 mapboxgl.accessToken = 'pk.eyJ1IjoiZGxiczAiLCJhIjoiY20wdGlpMmc2MHJqaDJsczVtNXRvN2ZneCJ9.47aVkXUGN8JNldnZUjj-nA';
@@ -22,10 +22,53 @@ const colours: Record<string, { colour: string; teamName: string; colourName: st
 
 let map: mapboxgl.Map | null = null;
 
-const db = getFirestore(firebaseApp);
-const gameState = useDocument(doc(collection(db, 'gameState'), 'game1'));
+const gameState = useStorage('gameState', gameStateInitial);
 
+interface BoardState {
+  markerLocations: Record<string, [number, number]>;
+  camera: { center: [number, number]; zoom: number };
+  exitDurationMs: number;
+  holdDurationMs: number;
+  gameState: typeof gameStateInitial;
+}
+
+const currentBoardState: Ref<BoardState> = ref({
+  markerLocations: {},
+  camera: { center: [138.5311, -34.9462], zoom: 10 },
+  exitDurationMs: 1000,
+  holdDurationMs: 1000,
+  gameState: gameStateInitial
+});
+
+const boardStates: Ref<BoardState[]> = useStorage('boardState', []);
 // setDoc(doc(db, 'gameState', 'game1'), gameState.value, { merge: false });
+const markersGeoData: FeatureCollection<Point> = {
+  type: 'FeatureCollection',
+  features: [
+    {
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: currentBoardState.value.markerLocations.team1 || [138.5011, -34.9462]
+      },
+      properties: {
+        id: 'team1-marker',
+        colour: '#F84C4C'
+      }
+    },
+    {
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: currentBoardState.value.markerLocations.team2 || [138.5611, -34.9462]
+      },
+      properties: {
+        id: 'team2-marker',
+        colour: '#4C8FF8'
+      }
+    }
+  ]
+};
 
 onMounted(() => {
   console.log('loading map');
@@ -48,7 +91,9 @@ onMounted(() => {
       source: 'areas',
       paint: {
         'fill-color': ['get', 'fillColor'],
-        'fill-opacity': ['case', ['!=', ['get', 'fillColor'], '#088'], 0.5, 0]
+        'fill-opacity': ['case', ['!=', ['get', 'fillColor'], '#088'], 0.5, 0],
+        'fill-color-transition': { duration: 500 },
+        'fill-opacity-transition': { duration: 500 }
       }
     });
     map.addLayer({
@@ -58,7 +103,7 @@ onMounted(() => {
       paint: {
         'line-color': '#FFF',
         'line-opacity': 1,
-        'line-width': 4
+        'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2.5, 14, 6]
       },
       layout: {}
     });
@@ -70,7 +115,7 @@ onMounted(() => {
         // 'line-color': '#0DA',
         'line-color': '#715C46',
         'line-opacity': 1,
-        'line-width': 2
+        'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.5, 14, 4]
       }
     });
     map.addLayer({
@@ -90,22 +135,88 @@ onMounted(() => {
         'text-halo-width': 2
       }
     });
-    // setTimeout(() => {
-    //   updateMap();
-    // }, 2000);
-    gameState.promise.value.then(() => {
-      updateMap();
+    const canvas = map.getCanvasContainer();
+
+    // ensure a GeoJSON source exists for the point layer so we can update it with setData
+    map.addSource('point', { type: 'geojson', data: markersGeoData });
+    map.addLayer({
+      id: 'point',
+      type: 'circle',
+      source: 'point',
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 8, 14, 20],
+        'circle-color': ['get', 'colour'],
+        'circle-stroke-color': '#FFF',
+        'circle-stroke-width': 2
+      }
     });
-    map.on('click', 'areas', (e) => {
-      if (!e.lngLat || !e.features) return;
-      if (!map) return;
-      const areaResult = area(e.features[0]) * 0.000001;
-      new mapboxgl.Popup()
-        .setLngLat(e.lngLat)
-        .setHTML(`${e?.features[0].properties?.electorate} <br/> ${areaResult.toFixed(1)}km2`)
-        .addTo(map);
-      currentlySelectedState.value = e?.features[0].properties?.electorate;
+    let draggingPoint: null | string = null;
+    function onMove(e: { point: PointLike | [PointLike, PointLike]; lngLat: any }) {
+      if (draggingPoint == null) {
+        const features = map?.queryRenderedFeatures(e.point, { layers: ['point'] });
+        // Set a UI indicator for dragging.
+        canvas.style.cursor = 'grabbing';
+
+        // Update the point feature in `point` source with new coordinates
+        if (features && features.length > 0) {
+          const id = features[0].properties?.id;
+          if (!id) return;
+          draggingPoint = id;
+        }
+      }
+      const marker = markersGeoData.features.find((f) => f.properties?.id === draggingPoint);
+      if (!marker) return;
+      marker.geometry.coordinates = [e.lngLat.lng, e.lngLat.lat];
+      const pointSource = map?.getSource('point') as mapboxgl.GeoJSONSource | undefined;
+      if (pointSource) {
+        pointSource.setData(markersGeoData);
+      }
+    }
+
+    function onUp() {
+      canvas.style.cursor = '';
+      draggingPoint = null;
+      map?.off('mousemove', onMove);
+      map?.off('touchmove', onMove);
+      currentBoardState.value.markerLocations = {
+        team1: markersGeoData.features.find((f) => f.properties?.id === 'team1-marker')?.geometry.coordinates as [number, number],
+        team2: markersGeoData.features.find((f) => f.properties?.id === 'team2-marker')?.geometry.coordinates as [number, number]
+      };
+    }
+
+    // When the cursor enters a feature in
+    // the point layer, prepare for dragging.
+    map.on('mouseenter', 'point', () => {
+      // map?.setPaintProperty('point', 'circle-color', '#3bb2d0');
+      canvas.style.cursor = 'move';
     });
+
+    map.on('mouseleave', 'point', () => {
+      // map?.setPaintProperty('point', 'circle-color', '#3887be');
+      canvas.style.cursor = '';
+    });
+
+    map.on('mousedown', 'point', (e) => {
+      // Prevent the default map drag behavior.
+      e.preventDefault();
+
+      canvas.style.cursor = 'grab';
+
+      map?.on('mousemove', onMove);
+      map?.once('mouseup', onUp);
+    });
+
+    map.on('touchstart', 'point', (e) => {
+      if (e.points.length !== 1) return;
+
+      // Prevent the default map drag behavior.
+      e.preventDefault();
+
+      map?.on('touchmove', onMove);
+      map?.once('touchend', onUp);
+    });
+
+    updateMap();
   });
   map.addControl(
     new mapboxgl.GeolocateControl({
@@ -123,11 +234,17 @@ const recording = ref(false);
 const recordProgress = ref(0);
 
 // Deterministic render-driven recorder using mapboxgl.setNow to advance time and capture exact frames.
-async function recordFlyTo(targetCenter: [number, number], targetZoom = 12, durationMs = 4000, fps = 60) {
+async function recordFlyTo(record: boolean, fps = 30) {
   if (!map) return;
   if (recording.value) return;
   recording.value = true;
   recordProgress.value = 0;
+
+  gameState.value = { ...gameStateInitial };
+  updateMap();
+  if (boardStates.value.length > 0)
+    map.jumpTo({ center: boardStates.value[0].camera.center, zoom: boardStates.value[0].camera.zoom });
+  await new Promise((r) => setTimeout(r, 100));
 
   const outWidth = 1920;
   const outHeight = 1080;
@@ -153,80 +270,169 @@ async function recordFlyTo(targetCenter: [number, number], targetZoom = 12, dura
   });
   output.addVideoTrack(videoSource);
 
-  await output.start();
+  if (record) await output.start();
 
   // deterministic timing
-  const framesCount = Math.ceil((durationMs / 1000) * fps);
-  console.log('framesCount:', framesCount);
-  let framesRecorded = 0;
   let now = performance.now();
+  // Calculate total duration from board states
+  const durationMs = boardStates.value.reduce((acc, state) => acc + state.exitDurationMs + state.holdDurationMs, 0);
+  const startTime = now;
+  const endTime = startTime + durationMs;
   const hasSetNow = typeof (mapboxgl as any).setNow === 'function';
-  console.log('hasSetNow:', hasSetNow);
-  if (hasSetNow) (mapboxgl as any).setNow(now);
+  if (hasSetNow && record) (mapboxgl as any).setNow(now);
 
-  let previousFrameComplete = true;
-
-  async function onRender() {
-    if (previousFrameComplete === false) return;
-    previousFrameComplete = false;
-
-    try {
-      if (!ctx) return;
-      await videoSource.add(framesRecorded / fps, 1 / fps);
-    } catch (e) {
-      console.error('Error drawing frame for recording', e);
-    }
-
-    framesRecorded += 1;
-    console.log('framesRecorded:', framesRecorded);
-    recordProgress.value = Math.round((framesRecorded / framesCount) * 100);
-
-    if (framesRecorded >= framesCount) {
-      // stop recording flow
-      if (map) map.off('render', onRender);
-      try {
-        if (hasSetNow && typeof (mapboxgl as any).restoreNow === 'function') (mapboxgl as any).restoreNow();
-      } catch (e) {
-        /* ignore */
+  function captureMap(frameNum: number) {
+    console.log('Capturing frame:', frameNum);
+    let numCapsForThisFrame = 0;
+    return new Promise<void>((resolve, reject) => {
+      if (!map) {
+        reject();
+        return;
       }
-      // stop recorder
-      await output.finalize();
+      const exitTimer = setTimeout(exit, 500);
+      map.on('render', capture);
+      map.triggerRepaint();
+
+      function capture() {
+        numCapsForThisFrame += 1;
+        videoSource.add(frameNum / fps, 1 / fps).catch((e) => reject(e));
+        if (numCapsForThisFrame > 3) exit();
+        return;
+      }
+      function exit() {
+        clearTimeout(exitTimer);
+        if (numCapsForThisFrame == 0)
+          videoSource
+            .add(frameNum / fps, 1 / fps)
+            .then(() => resolve())
+            .catch((e) => reject(e));
+        else resolve();
+        map?.off('render', capture);
+      }
+    });
+  }
+
+  let lastGameStateIndex = -1;
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+  async function showMapState(now: number, frameNum: number) {
+    // find the right frame based on now - startTime
+    const elapsedMs = now - startTime;
+    let accumulatedMs = 0;
+    let lastMarkerPositions: Record<string, [number, number]> = boardStates.value[0]?.markerLocations || {
+      team1: [138.5011, -34.9462],
+      team2: [138.5611, -34.9462]
+    };
+    for (const state of boardStates.value) {
+      const stateDurationMs = state.exitDurationMs + state.holdDurationMs;
+      if (elapsedMs >= accumulatedMs && elapsedMs < accumulatedMs + stateDurationMs) {
+        // in this state
+        if (boardStates.value.indexOf(state) !== lastGameStateIndex) {
+          lastGameStateIndex = boardStates.value.indexOf(state);
+          console.log('Entering board state index:', lastGameStateIndex);
+          gameState.value = { ...state.gameState };
+          updateMap();
+        }
+        const stateElapsedMs = elapsedMs - accumulatedMs;
+        const team1Marker = [
+          lerp(
+            lastMarkerPositions.team1[0],
+            state.markerLocations.team1[0],
+            stateElapsedMs / (state.holdDurationMs + state.exitDurationMs)
+          ),
+          lerp(
+            lastMarkerPositions.team1[1],
+            state.markerLocations.team1[1],
+            stateElapsedMs / (state.holdDurationMs + state.exitDurationMs)
+          )
+        ];
+        const team2Marker = [
+          lerp(
+            lastMarkerPositions.team2[0],
+            state.markerLocations.team2[0],
+            stateElapsedMs / (state.holdDurationMs + state.exitDurationMs)
+          ),
+          lerp(
+            lastMarkerPositions.team2[1],
+            state.markerLocations.team2[1],
+            stateElapsedMs / (state.holdDurationMs + state.exitDurationMs)
+          )
+        ];
+        markersGeoData.features.forEach((feature) => {
+          if (feature.properties?.id === 'team1-marker') {
+            feature.geometry.coordinates = team1Marker;
+          }
+          if (feature.properties?.id === 'team2-marker') {
+            feature.geometry.coordinates = team2Marker;
+          }
+        });
+        (map?.getSource('point') as mapboxgl.GeoJSONSource | undefined)?.setData(markersGeoData);
+        if (stateElapsedMs < state.holdDurationMs) {
+          // holding
+          map?.jumpTo({ center: state.camera.center, zoom: state.camera.zoom });
+          //lerp the marker positions for the duration of the hold
+        } else {
+          // transitioning to next state
+          const t = (stateElapsedMs - state.holdDurationMs) / state.exitDurationMs;
+          const nextState = boardStates.value[boardStates.value.indexOf(state) + 1];
+          if (nextState) {
+            const center: [number, number] = [
+              lerp(state.camera.center[0], nextState.camera.center[0], t),
+              lerp(state.camera.center[1], nextState.camera.center[1], t)
+            ];
+            const zoom = lerp(state.camera.zoom, nextState.camera.zoom, t);
+            map?.jumpTo({ center, zoom });
+          }
+        }
+        if (record) await captureMap(frameNum);
+        break;
+      }
+      accumulatedMs += stateDurationMs;
+      lastMarkerPositions = { ...state.markerLocations };
+    }
+  }
+
+  let frameNum = 0;
+  while (now <= endTime) {
+    await showMapState(now, frameNum);
+    frameNum += 1;
+
+    if (!record) now = performance.now();
+    else {
+      now += 1000 / fps;
+      if (hasSetNow && record) (mapboxgl as any).setNow(now);
     }
 
-    now += 1000 / fps;
-    if (hasSetNow) (mapboxgl as any).setNow(now);
-    previousFrameComplete = true;
+    await new Promise((r) => requestAnimationFrame(r));
+    recordProgress.value = Math.min(100, Math.round(((now - startTime) / durationMs) * 100));
   }
+  console.log('Finished all frames');
+  if (hasSetNow && typeof (mapboxgl as any).restoreNow === 'function') (mapboxgl as any).restoreNow();
 
-  map.on('render', onRender);
+  // Handle finalising the recording and exporting as video
 
-  // start the animation; setNow will drive animation timing deterministically
-  map.easeTo({ center: targetCenter, zoom: targetZoom, duration: durationMs, easing: (t: number) => t });
+  if (record) {
+    await output.finalize();
+    const buffer = output.target.buffer;
 
-  while (output.state != 'finalized') {
-    await new Promise((r) => setTimeout(r, 100));
+    if (!buffer) {
+      recording.value = false;
+      recordProgress.value = 100;
+      return;
+    }
+
+    // Ensure we have a Blob for createObjectURL; if we have an ArrayBuffer, wrap it
+    const blob = buffer instanceof Blob ? buffer : new Blob([buffer], { type: 'video/webm' });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `map-export-${Date.now()}.webm`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
-
-  const buffer = output.target.buffer;
-
-  if (!buffer) {
-    recording.value = false;
-    recordProgress.value = 100;
-    return;
-  }
-
-  // Ensure we have a Blob for createObjectURL; if we have an ArrayBuffer, wrap it
-  const blob = buffer instanceof Blob ? buffer : new Blob([buffer], { type: 'video/webm' });
-
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `map-export-${Date.now()}.webm`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-
   recording.value = false;
   recordProgress.value = 100;
 }
@@ -263,7 +469,10 @@ function claim(claimer: '1' | '2' | 'unclaimed') {
   };
   const key1 = currentlySelectedState.value;
   // use the firestore api to set the game state
-  setDoc(doc(db, 'gameState', 'game1'), { [key1]: claimer }, { merge: true });
+  gameState.value = {
+    ...gameState.value,
+    [key1]: claimer
+  };
 }
 
 const score = computed(() => {
@@ -286,12 +495,71 @@ const score = computed(() => {
   });
   return teams;
 });
+
+function saveFrame(index?: number, insert = false) {
+  const newFrame = JSON.parse(JSON.stringify(currentBoardState.value));
+  newFrame.frameDurationMs = 1000;
+  newFrame.camera.center = map?.getCenter().toArray() as [number, number];
+  newFrame.camera.zoom = map?.getZoom() || 10;
+  newFrame.gameState = JSON.parse(JSON.stringify(gameState.value));
+  newFrame.markerLocations = { ...currentBoardState.value.markerLocations };
+
+  if (insert) boardStates.value.splice(index || 0, 0, newFrame);
+  else if (typeof index == 'undefined') boardStates.value.push(newFrame);
+  else boardStates.value[index] = newFrame;
+}
+
+function loadFrame(index: number) {
+  const frame = boardStates.value[index];
+  if (!frame) return;
+  currentBoardState.value = JSON.parse(JSON.stringify(frame));
+  gameState.value = JSON.parse(JSON.stringify(frame.gameState));
+  updateMap();
+  map?.jumpTo({ center: frame.camera.center, zoom: frame.camera.zoom });
+  markersGeoData.features.forEach((feature) => {
+    if (feature.properties?.id === 'team1-marker' && frame.markerLocations.team1) {
+      feature.geometry.coordinates = frame.markerLocations.team1;
+    }
+    if (feature.properties?.id === 'team2-marker' && frame.markerLocations.team2) {
+      feature.geometry.coordinates = frame.markerLocations.team2;
+    }
+  });
+  (map?.getSource('point') as mapboxgl.GeoJSONSource | undefined)?.setData(markersGeoData);
+}
 </script>
 
 <template>
   <link href="https://api.tiles.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.css" rel="stylesheet" />
 
-  <div id="map" class="map"></div>
+  <div class="framesContainer">
+    <template v-for="(state, index) in boardStates" :key="index">
+      <button style="height: 3em" @click="saveFrame(index, true)">+</button>
+      <div class="frame" :id="`mapFrame${index}`">
+        <button @click="boardStates.splice(index, 1)">Delete</button>
+        <button @click="loadFrame(index)">Load</button>
+        <button @click="saveFrame(index)">Save</button>
+        <br />
+        Hold time<input label="Hold time" type="number" v-model.number="state.holdDurationMs" />ms
+        <br />
+        Exit time<input type="number" v-model.number="state.exitDurationMs" />ms {{ state.camera.center }} /
+        {{ state.camera.zoom }}
+      </div>
+    </template>
+    <div class="frame">
+      Add Frame
+      <button @click="saveFrame()">+</button>
+    </div>
+  </div>
+  <div class="mapWrapper">
+    <div id="map" class="map"></div>
+    <div class="gridOverlay" aria-hidden="true">
+      <div class="vline" style="left: 33.3333%"></div>
+      <div class="vline" style="left: 66.6666%"></div>
+      <div class="hline" style="top: 33.3333%"></div>
+      <div class="hline" style="top: 66.6666%"></div>
+      <div class="centerCross"></div>
+    </div>
+  </div>
   <div class="center">
     <div class="scoreHolder">
       <div class="team" v-for="(value, key) in score" :key="key">
@@ -312,7 +580,10 @@ const score = computed(() => {
         <button @click="claim(key as '1' | '2' | 'unclaimed')">{{ value.colourName }}</button>
       </template>
       <div class="recordControls">
-        <button @click="recordFlyTo([138.8, -35.0], 12, 4000, 60)" :disabled="recording">
+        <button @click="recordFlyTo(false)" :disabled="recording">
+          {{ recording ? 'Playing...' : 'Play' }}
+        </button>
+        <button @click="recordFlyTo(true)" :disabled="recording">
           {{ recording ? 'Recording...' : 'Record' }}
         </button>
         <div v-if="recording" class="progressBox">{{ recordProgress }}%</div>
@@ -322,9 +593,78 @@ const score = computed(() => {
 </template>
 
 <style scoped>
-.map {
+.frame {
+  margin: 4px;
+  width: 200px;
+  height: 180px;
+  border: #1e1e1e 2px solid;
+  border-radius: 4px;
+}
+.framesContainer {
+  display: flex;
+}
+.mapWrapper {
   width: 1920px;
   height: 1080px;
+  position: relative;
+}
+.map {
+  width: 100%;
+  height: 100%;
+}
+
+.gridOverlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+.gridOverlay .vline,
+.gridOverlay .hline {
+  position: absolute;
+  background: rgba(129, 129, 129, 0.65);
+  mix-blend-mode: overlay;
+}
+.gridOverlay .vline {
+  width: 1px;
+  top: 0;
+  bottom: 0;
+}
+.gridOverlay .hline {
+  height: 1px;
+  left: 0;
+  right: 0;
+}
+.gridOverlay .centerCross {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+}
+.gridOverlay .centerCross:before,
+.gridOverlay .centerCross:after {
+  content: '';
+  position: absolute;
+  background: rgba(255, 255, 255, 0.75);
+}
+.gridOverlay .centerCross:before {
+  left: 50%;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  transform: translateX(-50%);
+}
+.gridOverlay .centerCross:after {
+  top: 50%;
+  left: 0;
+  height: 1px;
+  width: 100%;
+  transform: translateY(-50%);
 }
 .center {
   width: 100%;
@@ -359,8 +699,9 @@ const score = computed(() => {
 .scoreHolder {
   position: absolute;
   text-align: center;
-  top: 10px;
-  z-index: 1;
+  bottom: 10px;
+  right: 0px;
+  z-index: 10;
   background-color: rgba(255, 255, 255, 0.8);
   padding: 8px;
   border-radius: 4px;
