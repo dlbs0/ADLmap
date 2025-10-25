@@ -332,7 +332,14 @@ async function recordFlyTo(record: boolean, fps = 30) {
     for (const state of boardStates.value) {
       const stateDurationMs = state.exitDurationMs + state.holdDurationMs;
       if (elapsedMs >= accumulatedMs && elapsedMs < accumulatedMs + stateDurationMs) {
+        const stateIndex = boardStates.value.indexOf(state);
+        let nextState = state;
+        if (stateIndex < boardStates.value.length - 1) {
+          nextState = boardStates.value[boardStates.value.indexOf(state) + 1];
+        }
         // in this state
+        const nextMarkerPositions = nextState.markerLocations;
+
         if (boardStates.value.indexOf(state) !== lastGameStateIndex) {
           lastGameStateIndex = boardStates.value.indexOf(state);
           console.log('Entering board state index:', lastGameStateIndex);
@@ -342,25 +349,25 @@ async function recordFlyTo(record: boolean, fps = 30) {
         const stateElapsedMs = elapsedMs - accumulatedMs;
         const team1Marker = [
           lerp(
-            lastMarkerPositions.team1[0],
             state.markerLocations.team1[0],
+            nextMarkerPositions.team1[0],
             stateElapsedMs / (state.holdDurationMs + state.exitDurationMs)
           ),
           lerp(
-            lastMarkerPositions.team1[1],
             state.markerLocations.team1[1],
+            nextMarkerPositions.team1[1],
             stateElapsedMs / (state.holdDurationMs + state.exitDurationMs)
           )
         ];
         const team2Marker = [
           lerp(
-            lastMarkerPositions.team2[0],
             state.markerLocations.team2[0],
+            nextMarkerPositions.team2[0],
             stateElapsedMs / (state.holdDurationMs + state.exitDurationMs)
           ),
           lerp(
-            lastMarkerPositions.team2[1],
             state.markerLocations.team2[1],
+            nextMarkerPositions.team2[1],
             stateElapsedMs / (state.holdDurationMs + state.exitDurationMs)
           )
         ];
@@ -380,7 +387,6 @@ async function recordFlyTo(record: boolean, fps = 30) {
         } else {
           // transitioning to next state
           const t = (stateElapsedMs - state.holdDurationMs) / state.exitDurationMs;
-          const nextState = boardStates.value[boardStates.value.indexOf(state) + 1];
           if (nextState) {
             const center: [number, number] = [
               lerp(state.camera.center[0], nextState.camera.center[0], t),
