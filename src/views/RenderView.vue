@@ -216,6 +216,11 @@ onMounted(() => {
       map?.on('touchmove', onMove);
       map?.once('touchend', onUp);
     });
+    map.on('click', 'areas', (e) => {
+      if (!e.lngLat || !e.features) return;
+      if (!map) return;
+      currentlySelectedState.value = e?.features[0].properties?.electorate;
+    });
 
     updateMap();
   });
