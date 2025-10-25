@@ -6,6 +6,7 @@ import { area } from '@turf/turf';
 import { useDocument } from 'vuefire';
 import { collection, doc, getFirestore, setDoc } from 'firebase/firestore';
 import { firebaseApp } from '@/main';
+import { Output, BufferTarget, Mp4OutputFormat, CanvasSource, AudioBufferSource, QUALITY_HIGH } from 'mediabunny';
 
 mapboxgl.accessToken = 'pk.eyJ1IjoiZGxicyIsImEiOiJjazQ5MW05NnYwMGp5M2ZwZGhlaXlrMjZoIn0.Mftbu2WiRY4SChlAU8mfrA';
 mapboxgl.accessToken = 'pk.eyJ1IjoiZGxiczAiLCJhIjoiY20wdGlpMmc2MHJqaDJsczVtNXRvN2ZneCJ9.47aVkXUGN8JNldnZUjj-nA';
@@ -117,6 +118,118 @@ onMounted(() => {
   );
 });
 
+// Recording state and utilities
+const recording = ref(false);
+const recordProgress = ref(0);
+
+// Deterministic render-driven recorder using mapboxgl.setNow to advance time and capture exact frames.
+async function recordFlyTo(targetCenter: [number, number], targetZoom = 12, durationMs = 4000, fps = 60) {
+  if (!map) return;
+  if (recording.value) return;
+  recording.value = true;
+  recordProgress.value = 0;
+
+  const outWidth = 1920;
+  const outHeight = 1080;
+
+  const srcCanvas = map.getCanvas();
+
+  const output = new Output({
+    format: new Mp4OutputFormat(), // The format of the file
+    target: new BufferTarget() // Where to write the file (here, to memory)
+  });
+
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width = outWidth;
+  outCanvas.height = outHeight;
+  const ctx = outCanvas.getContext('2d');
+  if (!ctx) {
+    recording.value = false;
+    return;
+  }
+  const videoSource = new CanvasSource(srcCanvas, {
+    codec: 'avc',
+    bitrate: QUALITY_HIGH
+  });
+  output.addVideoTrack(videoSource);
+
+  await output.start();
+
+  // deterministic timing
+  const framesCount = Math.ceil((durationMs / 1000) * fps);
+  console.log('framesCount:', framesCount);
+  let framesRecorded = 0;
+  let now = performance.now();
+  const hasSetNow = typeof (mapboxgl as any).setNow === 'function';
+  console.log('hasSetNow:', hasSetNow);
+  if (hasSetNow) (mapboxgl as any).setNow(now);
+
+  let previousFrameComplete = true;
+
+  async function onRender() {
+    if (previousFrameComplete === false) return;
+    previousFrameComplete = false;
+
+    try {
+      if (!ctx) return;
+      await videoSource.add(framesRecorded / fps, 1 / fps);
+    } catch (e) {
+      console.error('Error drawing frame for recording', e);
+    }
+
+    framesRecorded += 1;
+    console.log('framesRecorded:', framesRecorded);
+    recordProgress.value = Math.round((framesRecorded / framesCount) * 100);
+
+    if (framesRecorded >= framesCount) {
+      // stop recording flow
+      if (map) map.off('render', onRender);
+      try {
+        if (hasSetNow && typeof (mapboxgl as any).restoreNow === 'function') (mapboxgl as any).restoreNow();
+      } catch (e) {
+        /* ignore */
+      }
+      // stop recorder
+      await output.finalize();
+    }
+
+    now += 1000 / fps;
+    if (hasSetNow) (mapboxgl as any).setNow(now);
+    previousFrameComplete = true;
+  }
+
+  map.on('render', onRender);
+
+  // start the animation; setNow will drive animation timing deterministically
+  map.easeTo({ center: targetCenter, zoom: targetZoom, duration: durationMs, easing: (t: number) => t });
+
+  while (output.state != 'finalized') {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  const buffer = output.target.buffer;
+
+  if (!buffer) {
+    recording.value = false;
+    recordProgress.value = 100;
+    return;
+  }
+
+  // Ensure we have a Blob for createObjectURL; if we have an ArrayBuffer, wrap it
+  const blob = buffer instanceof Blob ? buffer : new Blob([buffer], { type: 'video/webm' });
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `map-export-${Date.now()}.webm`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+
+  recording.value = false;
+  recordProgress.value = 100;
+}
 watch(gameState, () => {
   // Update map colors based on game state
   updateMap();
@@ -198,14 +311,20 @@ const score = computed(() => {
       <template v-for="(value, key) in colours" :key="key">
         <button @click="claim(key as '1' | '2' | 'unclaimed')">{{ value.colourName }}</button>
       </template>
+      <div class="recordControls">
+        <button @click="recordFlyTo([138.8, -35.0], 12, 4000, 60)" :disabled="recording">
+          {{ recording ? 'Recording...' : 'Record' }}
+        </button>
+        <div v-if="recording" class="progressBox">{{ recordProgress }}%</div>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .map {
-  width: 100vw;
-  height: 100vh;
+  width: 1920px;
+  height: 1080px;
 }
 .center {
   width: 100%;
@@ -273,5 +392,17 @@ button {
   background-color: #1e1e1e;
   color: white;
   transition: background-color 0.3s ease;
+}
+
+.recordControls {
+  grid-column: span 3;
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  align-items: center;
+}
+.progressBox {
+  min-width: 120px;
+  text-align: center;
 }
 </style>

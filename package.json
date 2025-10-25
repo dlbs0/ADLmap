@@ -14,13 +14,12 @@
   "dependencies": {
     "@turf/turf": "^6.5.0",
     "firebase": "^12.3.0",
-    "h264-mp4-encoder": "^1.0.12",
     "mapbox-gl": "^3.15.0",
+    "mediabunny": "^1.24.2",
     "pinia": "^2.3.1",
     "vue": "^3.2.47",
     "vue-router": "^4.5.1",
-    "vuefire": "^3.2.2",
-    "wasm-feature-detect": "^1.0.0"
+    "vuefire": "^3.2.2"
   },
   "devDependencies": {
     "@rushstack/eslint-patch": "^1.12.0",
