@@ -650,7 +650,7 @@ function loadFrame(index: number) {
 .gridOverlay .centerCross:after {
   content: '';
   position: absolute;
-  background: rgba(255, 255, 255, 0.75);
+  background: rgba(109, 109, 109, 0.75);
 }
 .gridOverlay .centerCross:before {
   left: 50%;
