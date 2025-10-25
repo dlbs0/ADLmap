@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import mapboxgl, { PointLike } from 'mapbox-gl';
+import mapboxgl from 'mapbox-gl';
+import type { PointLike } from 'mapbox-gl';
 import { computed, onMounted, ref, watch } from 'vue';
 import type { Ref } from 'vue';
 import { gameState as gameStateInitial, mapData } from './data';
