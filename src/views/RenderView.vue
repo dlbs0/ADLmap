@@ -136,6 +136,8 @@ onMounted(() => {
         'text-halo-width': 2
       }
     });
+    map.setProjection('globe');
+    // map.setProjection('equirectangular');
     const canvas = map.getCanvasContainer();
 
     // ensure a GeoJSON source exists for the point layer so we can update it with setData
@@ -221,6 +223,11 @@ onMounted(() => {
       if (!map) return;
       currentlySelectedState.value = e?.features[0].properties?.electorate;
     });
+
+    currentBoardState.value.markerLocations = {
+      team1: markersGeoData.features.find((f) => f.properties?.id === 'team1-marker')?.geometry.coordinates as [number, number],
+      team2: markersGeoData.features.find((f) => f.properties?.id === 'team2-marker')?.geometry.coordinates as [number, number]
+    };
 
     updateMap();
   });
@@ -603,7 +610,6 @@ function loadFrame(index: number) {
     </div>
   </div>
 </template>
-
 <style scoped>
 .frame {
   margin: 4px;
