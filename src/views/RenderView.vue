@@ -545,6 +545,30 @@ function loadFrame(index: number) {
   });
   (map?.getSource('point') as mapboxgl.GeoJSONSource | undefined)?.setData(markersGeoData);
 }
+
+function capturePhoto() {
+  if (!map) return;
+
+  // Wait for the map to render completely
+  map.once('render', () => {
+    if (!map) return;
+
+    // Get the canvas and make sure we preserve the WebGL content
+    const canvas = map.getCanvas();
+    const dataUrl = canvas.toDataURL('image/png', 1.0);
+
+    // Create a temporary link element to trigger the download
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `map-snapshot-${Date.now()}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+
+  // Trigger a render to ensure we get the latest state
+  map.triggerRepaint();
+}
 </script>
 
 <template>
@@ -605,6 +629,7 @@ function loadFrame(index: number) {
         <button @click="recordFlyTo(true)" :disabled="recording">
           {{ recording ? 'Recording...' : 'Record' }}
         </button>
+        <button @click="capturePhoto()">Capture Photo</button>
         <div v-if="recording" class="progressBox">{{ recordProgress }}%</div>
       </div>
     </div>
